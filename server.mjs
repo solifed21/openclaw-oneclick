@@ -85,7 +85,16 @@ function getAgentRoutes(cfg) {
     route.channels.push({ guildId, channelId, requireMention });
   }
 
-  return [...byAgent.values()].sort((a, b) => a.agentId.localeCompare(b.agentId));
+  const routes = [...byAgent.values()].sort((a, b) => a.agentId.localeCompare(b.agentId));
+  for (const route of routes) {
+    const guildMap = new Map();
+    for (const ch of route.channels) {
+      if (!guildMap.has(ch.guildId)) guildMap.set(ch.guildId, []);
+      guildMap.get(ch.guildId).push({ channelId: ch.channelId, requireMention: ch.requireMention });
+    }
+    route.guilds = [...guildMap.entries()].map(([guildId, channels]) => ({ guildId, channels }));
+  }
+  return routes;
 }
 
 app.get('/api/state', (_req, res) => {
@@ -169,8 +178,18 @@ app.post('/api/apply', (req, res) => {
     cfg.channels.discord.guilds ??= {};
 
     for (const agent of normalizedAgents) {
-      const { agentId, model, channels = [], policy = {} } = agent || {};
+      const { agentId, model, channels = [], guilds = [], policy = {} } = agent || {};
       if (!agentId || !model) continue;
+
+      const expandedChannels = Array.isArray(channels) && channels.length > 0
+        ? channels
+        : (Array.isArray(guilds)
+            ? guilds.flatMap((g) => (g?.channels || []).map((c) => ({
+                guildId: g?.guildId,
+                channelId: c?.channelId,
+                requireMention: c?.requireMention,
+              })))
+            : []);
 
       cfg.agents.defaults.models[model] ??= {};
       merged.set(agentId, {
@@ -194,7 +213,7 @@ app.post('/api/apply', (req, res) => {
       };
       savedPolicies[agentId] = effectivePolicy;
 
-      for (const ch of channels) {
+      for (const ch of expandedChannels) {
         const guildId = ch?.guildId?.trim?.() || '';
         const channelId = ch?.channelId?.trim?.() || '';
         if (!guildId || !channelId) continue;
