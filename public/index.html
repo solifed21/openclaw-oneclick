@@ -12,7 +12,8 @@
 
     <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900">
       <h2 class="font-bold mb-2">현재 등록 상태 (openclaw.json 실시간)</h2>
-      <div id="current" class="text-sm text-zinc-300"></div>
+      <div id="current" class="text-sm text-zinc-300 mb-3"></div>
+      <pre id="currentJson" class="bg-black/40 border border-zinc-800 rounded p-3 text-xs text-zinc-300 overflow-auto max-h-96"></pre>
     </div>
 
     <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900 space-y-3">
@@ -83,6 +84,7 @@
         <p>등록 모델: <b>${j.models.join(', ')}</b></p>
         <p>현재 바인딩 수: <b>${j.bindings.length}</b></p>
       `;
+      document.getElementById('currentJson').textContent = JSON.stringify(j.config || {}, null, 2);
 
       document.getElementById('rows').innerHTML = '';
       rowId = 0;

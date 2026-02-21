@@ -21,6 +21,28 @@ function writeCfg(cfg) {
   return ts;
 }
 
+function maskSecret(v) {
+  const s = String(v || '');
+  if (!s) return s;
+  if (s.length <= 8) return '*'.repeat(s.length);
+  return `${s.slice(0, 4)}${'*'.repeat(Math.max(4, s.length - 8))}${s.slice(-4)}`;
+}
+
+function redactSecrets(input) {
+  if (Array.isArray(input)) return input.map(redactSecrets);
+  if (!input || typeof input !== 'object') return input;
+  const out = {};
+  for (const [k, v] of Object.entries(input)) {
+    const lower = k.toLowerCase();
+    if (['token', 'apikey', 'api_key', 'secret', 'password'].includes(lower)) {
+      out[k] = maskSecret(v);
+      continue;
+    }
+    out[k] = redactSecrets(v);
+  }
+  return out;
+}
+
 app.get('/api/state', (_req, res) => {
   try {
     const cfg = readCfg();
@@ -52,7 +74,8 @@ app.get('/api/state', (_req, res) => {
       });
     }
 
-    res.json({ agents: list, models, bindings, rawMeta: cfg.meta || {} });
+    const sanitizedConfig = redactSecrets(cfg);
+    res.json({ agents: list, models, bindings, rawMeta: cfg.meta || {}, config: sanitizedConfig });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
