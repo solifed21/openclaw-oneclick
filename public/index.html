@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenClaw 운영 콘솔</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-zinc-950 text-zinc-100">
+  <div class="max-w-6xl mx-auto p-6 space-y-6">
+    <h1 class="text-3xl font-bold">OpenClaw 운영 콘솔 (KR)</h1>
+
+    <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900">
+      <h2 class="font-bold mb-2">현재 등록 상태 (openclaw.json 실시간)</h2>
+      <div id="current" class="text-sm text-zinc-300"></div>
+    </div>
+
+    <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900 space-y-3">
+      <h2 class="font-bold">추가/수정 입력</h2>
+      <div class="grid md:grid-cols-2 gap-3">
+        <input id="discordToken" placeholder="Discord Bot Token" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2"/>
+        <input id="accountId" value="global-ops" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2"/>
+      </div>
+
+      <div class="flex gap-2">
+        <button onclick="addRow()" class="px-3 py-2 bg-indigo-600 rounded">+ 에이전트 행 추가</button>
+        <button onclick="applyConfig()" class="px-3 py-2 bg-emerald-600 rounded">적용</button>
+      </div>
+
+      <div id="rows" class="space-y-3"></div>
+    </div>
+
+    <pre id="log" class="bg-black/40 border border-zinc-800 rounded p-3 text-xs text-zinc-300"></pre>
+  </div>
+
+  <script>
+    let state = { models: [] };
+    let rowId = 0;
+
+    function policyOptions(id) {
+      return `
+      <div class="grid grid-cols-5 gap-2 mt-2">
+        <select id="rm-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1"><option value="true">멘션필수</option><option value="false">멘션불필요</option></select>
+        <select id="bf-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1"><option value="false">봇대화금지</option><option value="true">봇대화허용</option></select>
+        <input id="mt-${id}" type="number" value="3" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="max turns"/>
+        <input id="cd-${id}" type="number" value="15" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="cooldown"/>
+        <input id="ls-${id}" type="number" value="3" min="1" max="5" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="loop"/>
+      </div>`;
+    }
+
+    function modelSelect(id) {
+      const opts = state.models.map(m => `<option value="${m}">${m}</option>`).join('');
+      return `<select id="model-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1">${opts}</select>`;
+    }
+
+    function addRow(seed = {}) {
+      const id = ++rowId;
+      const el = document.createElement('div');
+      el.className = 'border border-zinc-700 rounded p-3';
+      el.dataset.row = id;
+      el.innerHTML = `
+        <div class="grid md:grid-cols-4 gap-2">
+          <input id="agent-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="agent id (예: proj2:plan)" value="${seed.agentId || ''}"/>
+          ${modelSelect(id)}
+          <input id="guild-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="guild id" value="${seed.guildId || ''}"/>
+          <input id="channel-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="channel id" value="${seed.channelId || ''}"/>
+        </div>
+        ${policyOptions(id)}
+      `;
+      document.getElementById('rows').appendChild(el);
+      if (seed.model) document.getElementById(`model-${id}`).value = seed.model;
+    }
+
+    async function loadState() {
+      const r = await fetch('/api/state');
+      const j = await r.json();
+      state = j;
+
+      document.getElementById('current').innerHTML = `
+        <p>등록 에이전트: <b>${j.agents.map(a => a.id).join(', ')}</b></p>
+        <p>등록 모델: <b>${j.models.join(', ')}</b></p>
+        <p>현재 바인딩 수: <b>${j.bindings.length}</b></p>
+      `;
+
+      document.getElementById('rows').innerHTML = '';
+      rowId = 0;
+      j.bindings.forEach(b => addRow({
+        agentId: b.agent,
+        model: (j.agents.find(a => a.id === b.agent)?.model) || j.models[0],
+        guildId: b.guildId,
+        channelId: b.channelId
+      }));
+      if (j.bindings.length === 0) addRow({});
+    }
+
+    function collectRows() {
+      return [...document.querySelectorAll('[data-row]')].map(el => {
+        const id = el.dataset.row;
+        return {
+          agentId: document.getElementById(`agent-${id}`).value.trim(),
+          model: document.getElementById(`model-${id}`).value.trim(),
+          guildId: document.getElementById(`guild-${id}`).value.trim(),
+          channelId: document.getElementById(`channel-${id}`).value.trim(),
+          policy: {
+            requireMention: document.getElementById(`rm-${id}`).value === 'true',
+            allowFromBots: document.getElementById(`bf-${id}`).value === 'true',
+            maxBotTurns: Number(document.getElementById(`mt-${id}`).value || 3),
+            cooldownSec: Number(document.getElementById(`cd-${id}`).value || 15),
+            loopSensitivity: Number(document.getElementById(`ls-${id}`).value || 3)
+          }
+        }
+      }).filter(r => r.agentId && r.model && r.guildId && r.channelId);
+    }
+
+    async function applyConfig() {
+      const payload = {
+        discordToken: document.getElementById('discordToken').value.trim(),
+        accountId: document.getElementById('accountId').value.trim() || 'global-ops',
+        rows: collectRows()
+      };
+
+      const r = await fetch('/api/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json();
+      document.getElementById('log').textContent = JSON.stringify(j, null, 2);
+      if (j.ok) await loadState();
+    }
+
+    loadState();
+  </script>
+</body>
+</html>

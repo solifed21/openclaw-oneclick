@@ -1,0 +1,13 @@
+{
+  "name": "openclaw-oneclick",
+  "version": "1.0.0",
+  "private": false,
+  "description": "OpenClaw KR control plane MVP",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
