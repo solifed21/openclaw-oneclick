@@ -43,49 +43,114 @@ function redactSecrets(input) {
   return out;
 }
 
+function getAgentRoutes(cfg) {
+  const routing = Array.isArray(cfg?.bindings) ? cfg.bindings : [];
+  const guilds = cfg?.channels?.discord?.guilds || {};
+  const oneclickMeta = cfg?.meta?.oneclick || {};
+  const savedPolicies = oneclickMeta?.agentPolicies || {};
+
+  const byAgent = new Map();
+  for (const b of routing) {
+    if (b?.match?.channel !== 'discord') continue;
+    if (b?.match?.peer?.kind !== 'channel') continue;
+
+    const guildId = b?.match?.guildId;
+    const channelId = b?.match?.peer?.id;
+    if (!guildId || !channelId) continue;
+
+    const agentId = b.agentId || 'main';
+    if (!byAgent.has(agentId)) {
+      byAgent.set(agentId, {
+        agentId,
+        accountId: b?.match?.accountId || 'global-ops',
+        policy: {
+          requireMention: true,
+          allowFromBots: false,
+          maxBotTurns: 3,
+          cooldownSec: 15,
+          loopSensitivity: 3,
+          ...(savedPolicies?.[agentId] || {}),
+        },
+        channels: [],
+      });
+    }
+
+    const route = byAgent.get(agentId);
+    const requireMention =
+      guilds?.[guildId]?.channels?.[channelId]?.requireMention ??
+      guilds?.[guildId]?.requireMention ??
+      route.policy.requireMention ??
+      true;
+
+    route.channels.push({ guildId, channelId, requireMention });
+  }
+
+  return [...byAgent.values()].sort((a, b) => a.agentId.localeCompare(b.agentId));
+}
+
 app.get('/api/state', (_req, res) => {
   try {
     const cfg = readCfg();
     const list = cfg?.agents?.list || [{ id: 'main' }, { id: 'global-ops' }];
     const models = Object.keys(cfg?.agents?.defaults?.models || { 'openai-codex/gpt-5.3-codex': {} });
+    const agentRoutes = getAgentRoutes(cfg).map((route) => ({
+      ...route,
+      model: (list.find((a) => a.id === route.agentId)?.model) || models[0],
+    }));
 
-    const bindings = [];
-    const guilds = cfg?.channels?.discord?.guilds || {};
-    const routing = Array.isArray(cfg?.bindings) ? cfg.bindings : [];
-
-    for (const b of routing) {
-      if (b?.match?.channel !== 'discord') continue;
-      if (b?.match?.peer?.kind !== 'channel') continue;
-      const guildId = b?.match?.guildId;
-      const channelId = b?.match?.peer?.id;
-      if (!guildId || !channelId) continue;
-
-      const requireMention =
-        guilds?.[guildId]?.channels?.[channelId]?.requireMention ??
-        guilds?.[guildId]?.requireMention ??
-        true;
-
-      bindings.push({
-        guildId,
-        channelId,
-        agent: b.agentId || 'main',
-        accountId: b?.match?.accountId || 'global-ops',
-        requireMention,
-      });
-    }
+    const bindings = agentRoutes.flatMap((r) => r.channels.map((c) => ({
+      guildId: c.guildId,
+      channelId: c.channelId,
+      agent: r.agentId,
+      accountId: r.accountId,
+      requireMention: c.requireMention,
+    })));
 
     const sanitizedConfig = redactSecrets(cfg);
-    res.json({ agents: list, models, bindings, rawMeta: cfg.meta || {}, config: sanitizedConfig });
+    res.json({ agents: list, models, bindings, agentRoutes, rawMeta: cfg.meta || {}, config: sanitizedConfig });
   } catch (e) {
     res.status(500).json({ error: String(e) });
   }
 });
 
+function normalizeRowsToAgents(rows = []) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const { agentId, model, guildId, channelId, accountId, token, policy } = row || {};
+    if (!agentId || !model || !guildId || !channelId) continue;
+
+    if (!grouped.has(agentId)) {
+      grouped.set(agentId, {
+        agentId,
+        model,
+        accountId,
+        token,
+        policy: policy || {},
+        channels: [],
+      });
+    }
+
+    const item = grouped.get(agentId);
+    if (!item.accountId && accountId) item.accountId = accountId;
+    if (!item.token && token) item.token = token;
+    item.channels.push({ guildId, channelId, requireMention: policy?.requireMention });
+  }
+  return [...grouped.values()];
+}
+
 app.post('/api/apply', (req, res) => {
   try {
-    const { discordToken, accountId = 'global-ops', rows = [] } = req.body || {};
-    if (!discordToken && !rows.some(r => r?.token)) throw new Error('기본 discordToken 또는 행별 token 중 하나는 필수');
-    if (!Array.isArray(rows) || rows.length === 0) throw new Error('rows 필수');
+    const { discordToken, accountId = 'global-ops', rows = [], agents = [] } = req.body || {};
+    const normalizedAgents = Array.isArray(agents) && agents.length > 0
+      ? agents
+      : normalizeRowsToAgents(rows);
+
+    if (!Array.isArray(normalizedAgents) || normalizedAgents.length === 0) {
+      throw new Error('agents(또는 rows) 필수');
+    }
+
+    const hasAnyToken = discordToken || normalizedAgents.some((a) => a?.token);
+    if (!hasAnyToken) throw new Error('기본 discordToken 또는 agent별 token 중 하나는 필수');
 
     const cfg = readCfg();
     cfg.agents ??= {};
@@ -94,46 +159,69 @@ app.post('/api/apply', (req, res) => {
     cfg.agents.list ??= [{ id: 'main' }, { id: 'global-ops' }];
 
     const merged = new Map(cfg.agents.list.map((a) => [a.id, a]));
-
     const newDiscordChannelBindings = [];
+    const savedPolicies = {};
 
-    for (const row of rows) {
-      const { agentId, model, guildId, channelId, policy } = row;
-      if (!agentId || !model || !guildId || !channelId) continue;
+    cfg.channels ??= {};
+    cfg.channels.discord ??= { enabled: true };
+    cfg.channels.discord.enabled = true;
+    cfg.channels.discord.accounts ??= {};
+    cfg.channels.discord.guilds ??= {};
+
+    for (const agent of normalizedAgents) {
+      const { agentId, model, channels = [], policy = {} } = agent || {};
+      if (!agentId || !model) continue;
+
       cfg.agents.defaults.models[model] ??= {};
       merged.set(agentId, {
         ...(merged.get(agentId) || {}),
         id: agentId,
         model,
-        workspace: `${os.homedir()}/.openclaw/workspace-${agentId.replace(/[:/]/g, '-')}`
+        workspace: `${os.homedir()}/.openclaw/workspace-${agentId.replace(/[:/]/g, '-')}`,
       });
 
-      const rowAccountId = row.accountId || accountId || 'global-ops';
-      const rowToken = row.token || discordToken;
-
-      cfg.channels ??= {};
-      cfg.channels.discord ??= { enabled: true };
-      cfg.channels.discord.enabled = true;
-      cfg.channels.discord.accounts ??= {};
+      const rowAccountId = agent.accountId || accountId || 'global-ops';
+      const rowToken = agent.token || discordToken;
       if (!rowToken) throw new Error(`token 누락: ${agentId}`);
       cfg.channels.discord.accounts[rowAccountId] = { token: rowToken, enabled: true };
-      cfg.channels.discord.guilds ??= {};
-      cfg.channels.discord.guilds[guildId] ??= { channels: {} };
-      cfg.channels.discord.guilds[guildId].channels ??= {};
-      cfg.channels.discord.guilds[guildId].channels[channelId] = {
-        allow: true,
-        requireMention: policy?.requireMention ?? true,
-      };
 
-      newDiscordChannelBindings.push({
-        agentId,
-        match: {
-          channel: 'discord',
-          accountId: rowAccountId,
-          guildId,
-          peer: { kind: 'channel', id: channelId },
-        },
-      });
+      const effectivePolicy = {
+        requireMention: policy?.requireMention ?? true,
+        allowFromBots: policy?.allowFromBots ?? false,
+        maxBotTurns: Number(policy?.maxBotTurns ?? 3),
+        cooldownSec: Number(policy?.cooldownSec ?? 15),
+        loopSensitivity: Number(policy?.loopSensitivity ?? 3),
+      };
+      savedPolicies[agentId] = effectivePolicy;
+
+      for (const ch of channels) {
+        const guildId = ch?.guildId?.trim?.() || '';
+        const channelId = ch?.channelId?.trim?.() || '';
+        if (!guildId || !channelId) continue;
+
+        const requireMention = ch?.requireMention ?? effectivePolicy.requireMention;
+
+        cfg.channels.discord.guilds[guildId] ??= { channels: {} };
+        cfg.channels.discord.guilds[guildId].channels ??= {};
+        cfg.channels.discord.guilds[guildId].channels[channelId] = {
+          allow: true,
+          requireMention,
+        };
+
+        newDiscordChannelBindings.push({
+          agentId,
+          match: {
+            channel: 'discord',
+            accountId: rowAccountId,
+            guildId,
+            peer: { kind: 'channel', id: channelId },
+          },
+        });
+      }
+    }
+
+    if (newDiscordChannelBindings.length === 0) {
+      throw new Error('유효한 channels가 없습니다. guildId/channelId 확인 필요');
     }
 
     cfg.bindings = [
@@ -145,6 +233,8 @@ app.post('/api/apply', (req, res) => {
 
     cfg.agents.list = [...merged.values()];
     cfg.meta ??= {};
+    cfg.meta.oneclick ??= {};
+    cfg.meta.oneclick.agentPolicies = savedPolicies;
     cfg.meta.lastTouchedAt = new Date().toISOString();
 
     const backupTs = writeCfg(cfg);
@@ -154,7 +244,14 @@ app.post('/api/apply', (req, res) => {
       : 'openclaw';
     execSync(`${bin} gateway restart`, { stdio: 'pipe' });
 
-    res.json({ ok: true, backup: `${cfgPath}.bak.${backupTs}` });
+    res.json({
+      ok: true,
+      backup: `${cfgPath}.bak.${backupTs}`,
+      summary: {
+        agents: normalizedAgents.length,
+        channels: newDiscordChannelBindings.length,
+      },
+    });
   } catch (e) {
     res.status(400).json({ ok: false, error: String(e) });
   }

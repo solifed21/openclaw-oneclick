@@ -17,18 +17,22 @@
     </div>
 
     <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900 space-y-3">
-      <h2 class="font-bold">추가/수정 입력</h2>
+      <h2 class="font-bold">추가/수정 입력 (에이전트 중심)</h2>
       <div class="grid md:grid-cols-2 gap-3">
-        <input id="discordToken" placeholder="기본 Discord Bot Token (행별 미입력 시 사용)" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2"/>
+        <input id="discordToken" placeholder="기본 Discord Bot Token (에이전트별 미입력 시 사용)" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2"/>
         <input id="accountId" value="global-ops" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2" placeholder="기본 accountId"/>
       </div>
 
       <div class="flex gap-2">
-        <button onclick="addRow()" class="px-3 py-2 bg-indigo-600 rounded">+ 에이전트 행 추가</button>
+        <button onclick="addAgentCard()" class="px-3 py-2 bg-indigo-600 rounded">+ 에이전트 추가</button>
         <button onclick="applyConfig()" class="px-3 py-2 bg-emerald-600 rounded">적용</button>
       </div>
 
-      <div id="rows" class="space-y-3"></div>
+      <div class="text-xs text-zinc-400">
+        채널 입력 형식: 한 줄에 <code>guildId:channelId</code> (예: <code>123:456</code>)
+      </div>
+
+      <div id="agents" class="space-y-3"></div>
     </div>
 
     <pre id="log" class="bg-black/40 border border-zinc-800 rounded p-3 text-xs text-zinc-300"></pre>
@@ -36,42 +40,58 @@
 
   <script>
     let state = { models: [] };
-    let rowId = 0;
-
-    function policyOptions(id) {
-      return `
-      <div class="grid grid-cols-5 gap-2 mt-2">
-        <select id="rm-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1"><option value="true">멘션필수</option><option value="false">멘션불필요</option></select>
-        <select id="bf-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1"><option value="false">봇대화금지</option><option value="true">봇대화허용</option></select>
-        <input id="mt-${id}" type="number" value="3" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="max turns"/>
-        <input id="cd-${id}" type="number" value="15" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="cooldown"/>
-        <input id="ls-${id}" type="number" value="3" min="1" max="5" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="loop"/>
-      </div>`;
-    }
+    let cardId = 0;
 
     function modelSelect(id) {
       const opts = state.models.map(m => `<option value="${m}">${m}</option>`).join('');
       return `<select id="model-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1">${opts}</select>`;
     }
 
-    function addRow(seed = {}) {
-      const id = ++rowId;
+    function addAgentCard(seed = {}) {
+      const id = ++cardId;
       const el = document.createElement('div');
-      el.className = 'border border-zinc-700 rounded p-3';
-      el.dataset.row = id;
+      el.className = 'border border-zinc-700 rounded p-3 space-y-2';
+      el.dataset.card = id;
+
+      const channelsText = (seed.channels || []).map(c => `${c.guildId}:${c.channelId}`).join('\n');
+      const policy = {
+        requireMention: seed.policy?.requireMention ?? true,
+        allowFromBots: seed.policy?.allowFromBots ?? false,
+        maxBotTurns: seed.policy?.maxBotTurns ?? 3,
+        cooldownSec: seed.policy?.cooldownSec ?? 15,
+        loopSensitivity: seed.policy?.loopSensitivity ?? 3,
+      };
+
       el.innerHTML = `
-        <div class="grid md:grid-cols-6 gap-2">
-          <input id="agent-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="agent id (예: proj2:plan)" value="${seed.agentId || ''}"/>
+        <div class="grid md:grid-cols-5 gap-2">
+          <input id="agent-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="agent id (예: cc)" value="${seed.agentId || ''}"/>
           ${modelSelect(id)}
-          <input id="guild-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="guild id" value="${seed.guildId || ''}"/>
-          <input id="channel-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="channel id" value="${seed.channelId || ''}"/>
           <input id="account-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="accountId" value="${seed.accountId || ''}"/>
-          <input id="token-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="행별 token(선택)" value=""/>
+          <input id="token-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="agent별 token(선택)" value=""/>
+          <button onclick="removeCard(${id})" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 hover:bg-zinc-700">삭제</button>
         </div>
-        ${policyOptions(id)}
+
+        <div class="grid grid-cols-5 gap-2">
+          <select id="rm-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1"><option value="true">멘션필수</option><option value="false">멘션불필요</option></select>
+          <select id="bf-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1"><option value="false">봇대화금지</option><option value="true">봇대화허용</option></select>
+          <input id="mt-${id}" type="number" value="${policy.maxBotTurns}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="max turns"/>
+          <input id="cd-${id}" type="number" value="${policy.cooldownSec}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="cooldown"/>
+          <input id="ls-${id}" type="number" value="${policy.loopSensitivity}" min="1" max="5" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="loop"/>
+        </div>
+
+        <textarea id="channels-${id}" rows="4" class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-2" placeholder="guildId:channelId\n147...:147..."></textarea>
       `;
-      document.getElementById('rows').appendChild(el);
+
+      document.getElementById('agents').appendChild(el);
+      document.getElementById(`channels-${id}`).value = channelsText;
+      document.getElementById(`rm-${id}`).value = String(policy.requireMention);
+      document.getElementById(`bf-${id}`).value = String(policy.allowFromBots);
       if (seed.model) document.getElementById(`model-${id}`).value = seed.model;
+    }
+
+    function removeCard(id) {
+      const card = document.querySelector(`[data-card="${id}"]`);
+      if (card) card.remove();
     }
 
     async function loadState() {
@@ -79,33 +99,40 @@
       const j = await r.json();
       state = j;
 
+      const channelCount = (j.agentRoutes || []).reduce((acc, a) => acc + (a.channels?.length || 0), 0);
       document.getElementById('current').innerHTML = `
         <p>등록 에이전트: <b>${j.agents.map(a => a.id).join(', ')}</b></p>
         <p>등록 모델: <b>${j.models.join(', ')}</b></p>
-        <p>현재 바인딩 수: <b>${j.bindings.length}</b></p>
+        <p>에이전트 라우트 수: <b>${(j.agentRoutes || []).length}</b> / 채널 수: <b>${channelCount}</b></p>
       `;
       document.getElementById('currentJson').textContent = JSON.stringify(j.config || {}, null, 2);
 
-      document.getElementById('rows').innerHTML = '';
-      rowId = 0;
-      j.bindings.forEach(b => addRow({
-        agentId: b.agent,
-        model: (j.agents.find(a => a.id === b.agent)?.model) || j.models[0],
-        guildId: b.guildId,
-        channelId: b.channelId,
-        accountId: b.accountId || 'global-ops'
-      }));
-      if (j.bindings.length === 0) addRow({});
+      document.getElementById('agents').innerHTML = '';
+      cardId = 0;
+
+      const routes = (j.agentRoutes || []).sort((a, b) => a.agentId.localeCompare(b.agentId));
+      routes.forEach(route => addAgentCard(route));
+      if (routes.length === 0) addAgentCard({});
     }
 
-    function collectRows() {
-      return [...document.querySelectorAll('[data-row]')].map(el => {
-        const id = el.dataset.row;
+    function parseChannels(text) {
+      return String(text || '')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => {
+          const [guildId, channelId] = line.split(':').map(v => (v || '').trim());
+          return { guildId, channelId };
+        })
+        .filter(c => c.guildId && c.channelId);
+    }
+
+    function collectAgents() {
+      return [...document.querySelectorAll('[data-card]')].map(el => {
+        const id = el.dataset.card;
         return {
           agentId: document.getElementById(`agent-${id}`).value.trim(),
           model: document.getElementById(`model-${id}`).value.trim(),
-          guildId: document.getElementById(`guild-${id}`).value.trim(),
-          channelId: document.getElementById(`channel-${id}`).value.trim(),
           accountId: document.getElementById(`account-${id}`).value.trim(),
           token: document.getElementById(`token-${id}`).value.trim(),
           policy: {
@@ -114,16 +141,17 @@
             maxBotTurns: Number(document.getElementById(`mt-${id}`).value || 3),
             cooldownSec: Number(document.getElementById(`cd-${id}`).value || 15),
             loopSensitivity: Number(document.getElementById(`ls-${id}`).value || 3)
-          }
-        }
-      }).filter(r => r.agentId && r.model && r.guildId && r.channelId);
+          },
+          channels: parseChannels(document.getElementById(`channels-${id}`).value)
+        };
+      }).filter(a => a.agentId && a.model && a.channels.length > 0);
     }
 
     async function applyConfig() {
       const payload = {
         discordToken: document.getElementById('discordToken').value.trim(),
         accountId: document.getElementById('accountId').value.trim() || 'global-ops',
-        rows: collectRows()
+        agents: collectAgents()
       };
 
       const r = await fetch('/api/apply', {
