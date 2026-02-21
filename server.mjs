@@ -29,20 +29,27 @@ app.get('/api/state', (_req, res) => {
 
     const bindings = [];
     const guilds = cfg?.channels?.discord?.guilds || {};
-    for (const [guildId, g] of Object.entries(guilds)) {
-      for (const [channelId, c] of Object.entries(g?.channels || {})) {
-        bindings.push({
-          guildId,
-          channelId,
-          agent: c.agent || 'main',
-          accountId: c.accountId || 'global-ops',
-          requireMention: c.requireMention ?? true,
-          allowFromBots: c.allowFromBots ?? false,
-          maxBotTurns: c.maxBotTurns ?? 3,
-          cooldownSec: c.cooldownSec ?? 15,
-          loopSensitivity: c?.loopGuard?.sensitivity ?? 3
-        });
-      }
+    const routing = Array.isArray(cfg?.bindings) ? cfg.bindings : [];
+
+    for (const b of routing) {
+      if (b?.match?.channel !== 'discord') continue;
+      if (b?.match?.peer?.kind !== 'channel') continue;
+      const guildId = b?.match?.guildId;
+      const channelId = b?.match?.peer?.id;
+      if (!guildId || !channelId) continue;
+
+      const requireMention =
+        guilds?.[guildId]?.channels?.[channelId]?.requireMention ??
+        guilds?.[guildId]?.requireMention ??
+        true;
+
+      bindings.push({
+        guildId,
+        channelId,
+        agent: b.agentId || 'main',
+        accountId: b?.match?.accountId || 'global-ops',
+        requireMention,
+      });
     }
 
     res.json({ agents: list, models, bindings, rawMeta: cfg.meta || {} });
@@ -64,6 +71,8 @@ app.post('/api/apply', (req, res) => {
     cfg.agents.list ??= [{ id: 'main' }, { id: 'global-ops' }];
 
     const merged = new Map(cfg.agents.list.map((a) => [a.id, a]));
+
+    const newDiscordChannelBindings = [];
 
     for (const row of rows) {
       const { agentId, model, guildId, channelId, policy } = row;
@@ -89,15 +98,27 @@ app.post('/api/apply', (req, res) => {
       cfg.channels.discord.guilds[guildId] ??= { channels: {} };
       cfg.channels.discord.guilds[guildId].channels ??= {};
       cfg.channels.discord.guilds[guildId].channels[channelId] = {
-        agent: agentId,
-        accountId: rowAccountId,
+        allow: true,
         requireMention: policy?.requireMention ?? true,
-        allowFromBots: policy?.allowFromBots ?? false,
-        maxBotTurns: Number(policy?.maxBotTurns ?? 3),
-        cooldownSec: Number(policy?.cooldownSec ?? 15),
-        loopGuard: { enabled: true, sensitivity: Number(policy?.loopSensitivity ?? 3) }
       };
+
+      newDiscordChannelBindings.push({
+        agentId,
+        match: {
+          channel: 'discord',
+          accountId: rowAccountId,
+          guildId,
+          peer: { kind: 'channel', id: channelId },
+        },
+      });
     }
+
+    cfg.bindings = [
+      ...((Array.isArray(cfg.bindings) ? cfg.bindings : []).filter(
+        (b) => !(b?.match?.channel === 'discord' && b?.match?.peer?.kind === 'channel')
+      )),
+      ...newDiscordChannelBindings,
+    ];
 
     cfg.agents.list = [...merged.values()];
     cfg.meta ??= {};
