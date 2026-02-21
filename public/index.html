@@ -18,8 +18,8 @@
     <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900 space-y-3">
       <h2 class="font-bold">추가/수정 입력</h2>
       <div class="grid md:grid-cols-2 gap-3">
-        <input id="discordToken" placeholder="Discord Bot Token" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2"/>
-        <input id="accountId" value="global-ops" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2"/>
+        <input id="discordToken" placeholder="기본 Discord Bot Token (행별 미입력 시 사용)" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2"/>
+        <input id="accountId" value="global-ops" class="bg-zinc-800 border border-zinc-700 rounded px-3 py-2" placeholder="기본 accountId"/>
       </div>
 
       <div class="flex gap-2">
@@ -59,11 +59,13 @@
       el.className = 'border border-zinc-700 rounded p-3';
       el.dataset.row = id;
       el.innerHTML = `
-        <div class="grid md:grid-cols-4 gap-2">
+        <div class="grid md:grid-cols-6 gap-2">
           <input id="agent-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="agent id (예: proj2:plan)" value="${seed.agentId || ''}"/>
           ${modelSelect(id)}
           <input id="guild-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="guild id" value="${seed.guildId || ''}"/>
           <input id="channel-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="channel id" value="${seed.channelId || ''}"/>
+          <input id="account-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="accountId" value="${seed.accountId || ''}"/>
+          <input id="token-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="행별 token(선택)" value=""/>
         </div>
         ${policyOptions(id)}
       `;
@@ -88,7 +90,8 @@
         agentId: b.agent,
         model: (j.agents.find(a => a.id === b.agent)?.model) || j.models[0],
         guildId: b.guildId,
-        channelId: b.channelId
+        channelId: b.channelId,
+        accountId: b.accountId || 'global-ops'
       }));
       if (j.bindings.length === 0) addRow({});
     }
@@ -101,6 +104,8 @@
           model: document.getElementById(`model-${id}`).value.trim(),
           guildId: document.getElementById(`guild-${id}`).value.trim(),
           channelId: document.getElementById(`channel-${id}`).value.trim(),
+          accountId: document.getElementById(`account-${id}`).value.trim(),
+          token: document.getElementById(`token-${id}`).value.trim(),
           policy: {
             requireMention: document.getElementById(`rm-${id}`).value === 'true',
             allowFromBots: document.getElementById(`bf-${id}`).value === 'true',

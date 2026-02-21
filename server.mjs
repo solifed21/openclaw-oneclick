@@ -35,6 +35,7 @@ app.get('/api/state', (_req, res) => {
           guildId,
           channelId,
           agent: c.agent || 'main',
+          accountId: c.accountId || 'global-ops',
           requireMention: c.requireMention ?? true,
           allowFromBots: c.allowFromBots ?? false,
           maxBotTurns: c.maxBotTurns ?? 3,
@@ -53,7 +54,7 @@ app.get('/api/state', (_req, res) => {
 app.post('/api/apply', (req, res) => {
   try {
     const { discordToken, accountId = 'global-ops', rows = [] } = req.body || {};
-    if (!discordToken) throw new Error('discordToken 필수');
+    if (!discordToken && !rows.some(r => r?.token)) throw new Error('기본 discordToken 또는 행별 token 중 하나는 필수');
     if (!Array.isArray(rows) || rows.length === 0) throw new Error('rows 필수');
 
     const cfg = readCfg();
@@ -75,16 +76,21 @@ app.post('/api/apply', (req, res) => {
         workspace: `${os.homedir()}/.openclaw/workspace-${agentId.replace(/[:/]/g, '-')}`
       });
 
+      const rowAccountId = row.accountId || accountId || 'global-ops';
+      const rowToken = row.token || discordToken;
+
       cfg.channels ??= {};
       cfg.channels.discord ??= { enabled: true };
       cfg.channels.discord.enabled = true;
       cfg.channels.discord.accounts ??= {};
-      cfg.channels.discord.accounts[accountId] = { token: discordToken, enabled: true };
+      if (!rowToken) throw new Error(`token 누락: ${agentId}`);
+      cfg.channels.discord.accounts[rowAccountId] = { token: rowToken, enabled: true };
       cfg.channels.discord.guilds ??= {};
       cfg.channels.discord.guilds[guildId] ??= { channels: {} };
       cfg.channels.discord.guilds[guildId].channels ??= {};
       cfg.channels.discord.guilds[guildId].channels[channelId] = {
         agent: agentId,
+        accountId: rowAccountId,
         requireMention: policy?.requireMention ?? true,
         allowFromBots: policy?.allowFromBots ?? false,
         maxBotTurns: Number(policy?.maxBotTurns ?? 3),
