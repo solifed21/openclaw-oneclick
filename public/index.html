@@ -139,8 +139,14 @@
           <input id="agent-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="agent id (예: cc)" value="${seed.agentId || ''}"/>
           ${modelSelect(id)}
           <input id="account-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="accountId" value="${seed.accountId || ''}"/>
-          <input id="token-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="agent별 token(선택)" value=""/>
+          <div class="flex items-center gap-2 border border-zinc-700 rounded px-2 py-1 bg-zinc-900/40">
+            <span class="text-xs ${seed.tokenConfigured ? 'text-emerald-400' : 'text-amber-400'}">${seed.tokenConfigured ? '토큰 적용됨' : '토큰 미설정'}</span>
+            <button onclick="toggleTokenInput(${id})" class="text-xs px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700">토큰 재입력</button>
+          </div>
           <button onclick="removeAgentCard(${id})" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 hover:bg-zinc-700">에이전트 삭제</button>
+        </div>
+        <div id="token-wrap-${id}" class="hidden">
+          <input id="token-${id}" class="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1" placeholder="토큰을 바꿀 때만 입력" value=""/>
         </div>
 
         <div class="grid grid-cols-5 gap-2">
@@ -168,6 +174,12 @@
       const guilds = seed.guilds || [];
       if (guilds.length === 0) addGuild(id);
       guilds.forEach(g => addGuild(id, g));
+    }
+
+    function toggleTokenInput(id) {
+      const wrap = document.getElementById(`token-wrap-${id}`);
+      if (!wrap) return;
+      wrap.classList.toggle('hidden');
     }
 
     function removeAgentCard(id) {

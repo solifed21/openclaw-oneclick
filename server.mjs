@@ -102,9 +102,11 @@ app.get('/api/state', (_req, res) => {
     const cfg = readCfg();
     const list = cfg?.agents?.list || [{ id: 'main' }, { id: 'global-ops' }];
     const models = Object.keys(cfg?.agents?.defaults?.models || { 'openai-codex/gpt-5.3-codex': {} });
+    const accounts = cfg?.channels?.discord?.accounts || {};
     const agentRoutes = getAgentRoutes(cfg).map((route) => ({
       ...route,
       model: (list.find((a) => a.id === route.agentId)?.model) || models[0],
+      tokenConfigured: Boolean(accounts?.[route.accountId || '']?.token),
     }));
 
     const bindings = agentRoutes.flatMap((r) => r.channels.map((c) => ({
@@ -158,9 +160,6 @@ app.post('/api/apply', (req, res) => {
       throw new Error('agents(또는 rows) 필수');
     }
 
-    const hasAnyToken = discordToken || normalizedAgents.some((a) => a?.token);
-    if (!hasAnyToken) throw new Error('기본 discordToken 또는 agent별 token 중 하나는 필수');
-
     const cfg = readCfg();
     cfg.agents ??= {};
     cfg.agents.defaults ??= {};
@@ -200,8 +199,9 @@ app.post('/api/apply', (req, res) => {
       });
 
       const rowAccountId = agent.accountId || accountId || 'global-ops';
-      const rowToken = agent.token || discordToken;
-      if (!rowToken) throw new Error(`token 누락: ${agentId}`);
+      const existingAccountToken = cfg.channels.discord.accounts?.[rowAccountId]?.token;
+      const rowToken = agent.token || discordToken || existingAccountToken;
+      if (!rowToken) throw new Error(`token 누락: ${agentId} (기본/에이전트 입력 또는 기존 accountId 토큰 필요)`);
       cfg.channels.discord.accounts[rowAccountId] = { token: rowToken, enabled: true };
 
       const effectivePolicy = {
