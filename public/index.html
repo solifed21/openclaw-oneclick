@@ -10,10 +10,17 @@
   <div class="max-w-6xl mx-auto p-6 space-y-6">
     <h1 class="text-3xl font-bold">OpenClaw 운영 콘솔 (KR)</h1>
 
-    <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900">
-      <h2 class="font-bold mb-2">현재 등록 상태 (openclaw.json 실시간)</h2>
-      <div id="current" class="text-sm text-zinc-300 mb-3"></div>
-      <pre id="currentJson" class="bg-black/40 border border-zinc-800 rounded p-3 text-xs text-zinc-300 overflow-auto max-h-96"></pre>
+    <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900 space-y-4">
+      <h2 class="font-bold mb-1">현재 등록 상태</h2>
+
+      <div id="currentSummary" class="grid md:grid-cols-4 gap-3"></div>
+
+      <details class="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+        <summary class="cursor-pointer text-sm text-zinc-200">에이전트 상세 보기 (접기/펼치기)</summary>
+        <div id="currentAgents" class="mt-3 space-y-2"></div>
+      </details>
+
+      <div id="currentMeta" class="text-xs text-zinc-400"></div>
     </div>
 
     <div class="rounded-xl border border-zinc-800 p-4 bg-zinc-900 space-y-3">
@@ -43,6 +50,74 @@
     function modelSelect(id) {
       const opts = state.models.map(m => `<option value="${m}">${m}</option>`).join('');
       return `<select id="model-${id}" class="bg-zinc-800 border border-zinc-700 rounded px-2 py-1">${opts}</select>`;
+    }
+
+    function summaryCard(label, value, sub = '') {
+      return `
+        <div class="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+          <div class="text-xs text-zinc-400">${label}</div>
+          <div class="text-2xl font-semibold">${value}</div>
+          ${sub ? `<div class="text-xs text-zinc-500 mt-1">${sub}</div>` : ''}
+        </div>
+      `;
+    }
+
+    function renderOverview(j) {
+      const routes = j.agentRoutes || [];
+      const guildSet = new Set();
+      let channelCount = 0;
+      for (const a of routes) {
+        for (const g of (a.guilds || [])) {
+          guildSet.add(g.guildId);
+          channelCount += (g.channels || []).length;
+        }
+      }
+
+      document.getElementById('currentSummary').innerHTML = `
+        ${summaryCard('에이전트', routes.length || 0, '라우팅 기준')}
+        ${summaryCard('길드', guildSet.size, '고유 길드 수')}
+        ${summaryCard('채널', channelCount, '전체 연결 채널')}
+        ${summaryCard('모델', (j.models || []).length, (j.models || [])[0] || '-')}
+      `;
+
+      const agentCards = routes.map(route => {
+        const guilds = route.guilds || [];
+        const guildHtml = guilds.map(g => {
+          const chs = g.channels || [];
+          return `
+            <details class="border border-zinc-800 rounded p-2 bg-zinc-900/40">
+              <summary class="cursor-pointer text-sm">길드 ${g.guildId} · 채널 ${chs.length}개</summary>
+              <ul class="mt-2 text-xs text-zinc-300 space-y-1">
+                ${chs.map(c => `<li>• #${c.channelId} <span class="text-zinc-500">(${c.requireMention ? '멘션필수' : '멘션불필요'})</span></li>`).join('')}
+              </ul>
+            </details>
+          `;
+        }).join('');
+
+        return `
+          <details class="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3" ${routes.length <= 2 ? 'open' : ''}>
+            <summary class="cursor-pointer font-medium">
+              ${route.agentId} · 길드 ${(route.guilds || []).length}개 · 채널 ${(route.channels || []).length}개
+            </summary>
+            <div class="mt-2 text-xs text-zinc-300 space-y-2">
+              <div>모델: <b>${route.model || '-'}</b> / accountId: <b>${route.accountId || '-'}</b></div>
+              <div class="flex gap-2 flex-wrap">
+                <span class="px-2 py-0.5 rounded bg-zinc-800">멘션 ${route.policy?.requireMention ? '필수' : '불필요'}</span>
+                <span class="px-2 py-0.5 rounded bg-zinc-800">봇대화 ${route.policy?.allowFromBots ? '허용' : '금지'}</span>
+                <span class="px-2 py-0.5 rounded bg-zinc-800">쿨다운 ${route.policy?.cooldownSec ?? '-'}s</span>
+                <span class="px-2 py-0.5 rounded bg-zinc-800">턴 ${route.policy?.maxBotTurns ?? '-'}</span>
+                <span class="px-2 py-0.5 rounded bg-zinc-800">루프민감도 ${route.policy?.loopSensitivity ?? '-'}</span>
+              </div>
+              <div class="space-y-2">${guildHtml || '<div class="text-zinc-500">연결된 길드/채널 없음</div>'}</div>
+            </div>
+          </details>
+        `;
+      }).join('');
+
+      document.getElementById('currentAgents').innerHTML = agentCards || '<div class="text-sm text-zinc-500">등록된 에이전트 라우팅이 없습니다.</div>';
+
+      const touchedAt = j.rawMeta?.lastTouchedAt ? new Date(j.rawMeta.lastTouchedAt).toLocaleString('ko-KR') : '-';
+      document.getElementById('currentMeta').textContent = `마지막 적용 시각: ${touchedAt}`;
     }
 
     function addAgentCard(seed = {}) {
@@ -198,14 +273,7 @@
       const r = await fetch('/api/state');
       const j = await r.json();
       state = j;
-
-      const channelCount = (j.agentRoutes || []).reduce((acc, a) => acc + (a.channels?.length || 0), 0);
-      document.getElementById('current').innerHTML = `
-        <p>등록 에이전트: <b>${j.agents.map(a => a.id).join(', ')}</b></p>
-        <p>등록 모델: <b>${j.models.join(', ')}</b></p>
-        <p>에이전트 라우트 수: <b>${(j.agentRoutes || []).length}</b> / 채널 수: <b>${channelCount}</b></p>
-      `;
-      document.getElementById('currentJson').textContent = JSON.stringify(j.config || {}, null, 2);
+      renderOverview(j);
 
       document.getElementById('agents').innerHTML = '';
       agentIdSeq = 0;
